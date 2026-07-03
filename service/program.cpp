@@ -42,6 +42,7 @@
 
 #include "utility/buildsys.hpp"
 #include "utility/path.hpp"
+#include "utility/time.hpp"
 
 #include "githash.hpp"
 
@@ -112,6 +113,36 @@ void setCLocale()
 }
 
 #endif
+
+std::string logTimestamp()
+{
+    // "YYYY-MM-DD HH:MM:SS" -> "YYYYMMDD-HHMMSS" (filename-safe)
+    std::string out;
+    for (char c : utility::formatDateTime(std::time(nullptr))) {
+        if (c == '-' || c == ':') { continue; }
+        out.push_back((c == ' ') ? '-' : c);
+    }
+    return out;
+}
+
+/** Dumps parsed options in a config-file (ini) compatible format: one
+ *  "key = value" line per value; flag-like options (no value) as
+ *  "key = true". Reflects what was actually specified on the command
+ *  line and in config files, not option defaults.
+ */
+void dumpIni(std::ostream &os, const std::vector<po::option> &options)
+{
+    for (const auto &opt : options) {
+        if (opt.string_key.empty()) { continue; }
+        if (opt.value.empty()) {
+            os << opt.string_key << " = true\n";
+            continue;
+        }
+        for (const auto &value : opt.value) {
+            os << opt.string_key << " = " << value << "\n";
+        }
+    }
+}
 
 void add(UnrecognizedOptions &un
          , const po::basic_parsed_options<char> &parsed)
@@ -420,10 +451,10 @@ Program::configureImpl(int argc, char *argv[]
     {
         auto parsed(parser.run());
         po::store(parsed, vm);
-        if (unrecognized(flags_)) {
-            parsedOptions.insert(parsedOptions.end(), parsed.options.begin()
-                                 , parsed.options.end());
-        }
+        // kept for the unrecognized-options machinery below and for the
+        // data-tool startup banner's ini dump
+        parsedOptions.insert(parsedOptions.end(), parsed.options.begin()
+                             , parsed.options.end());
     });
 
     // parse cmdline (support response file)
@@ -565,6 +596,9 @@ Program::configureImpl(int argc, char *argv[]
                 auto parsed(po::parse_config_file(f, configs
                             , flags_ & ENABLE_CONFIG_UNRECOGNIZED_OPTIONS));
                 store(parsed, vm);
+                parsedOptions.insert(parsedOptions.end()
+                                     , parsed.options.begin()
+                                     , parsed.options.end());
 
                 if (flags_ & ENABLE_CONFIG_UNRECOGNIZED_OPTIONS) {
                     add(un, parsed);
@@ -593,13 +627,32 @@ Program::configureImpl(int argc, char *argv[]
         dbglog::set_mask(vm["log.mask"].as<dbglog::mask>());
     }
 
-    // set log file if set
-    if (vm.count("log.file")) {
+    // Data tools (operatingDirectory() overridden) get a default log file
+    // under <dir>/log when the operator didn't ask for a specific one.
+    const auto opDir(operatingDirectory(vm));
+    boost::optional<boost::filesystem::path> autoLogFile;
+    if (opDir && !vm.count("log.file")) {
+        const auto logDir(*opDir / "log");
+        boost::system::error_code ec;
+        boost::filesystem::create_directories(logDir, ec);
+        if (ec) {
+            LOG(warn3) << "Cannot create log directory " << logDir
+                       << ": " << ec.message() << "; not logging to a file.";
+        } else {
+            autoLogFile = logDir
+                / (name + "-" + logTimestamp() + ".log");
+        }
+    }
+
+    // set log file if set (explicitly, or auto-derived for a data tool)
+    if (vm.count("log.file") || autoLogFile) {
         bool archive(vm.count("log.file.archive"));
         bool truncate(vm.count("log.file.truncate"));
 
         // NB: notify(vm) not called yet => logFile_ is not set!
-        logFile_ = absolute(vm["log.file"].as<boost::filesystem::path>());
+        logFile_ = vm.count("log.file")
+            ? absolute(vm["log.file"].as<boost::filesystem::path>())
+            : *autoLogFile;
 
         if (archive) {
             boost::system::error_code ec;
@@ -640,6 +693,27 @@ Program::configureImpl(int argc, char *argv[]
         for (const auto & d : dumpOutput) {
             LOG(info3) << d.rdbuf();
         }
+    }
+
+    if (opDir) {
+        // Mandatory startup banner for data tools: complete command line,
+        // cwd, and the resolved configuration in ini format. Logged first,
+        // before anything else -- including anything the derived class
+        // logs from its own configure().
+        std::ostringstream cmdline;
+        for (int i = 0; i < argc; ++i) {
+            if (i) { cmdline << ' '; }
+            cmdline << argv[i];
+        }
+
+        std::ostringstream banner;
+        banner << "Command line: " << cmdline.str() << '\n'
+               << "Working directory: "
+               << boost::filesystem::current_path().string() << '\n'
+               << "Configuration:\n";
+        dumpIni(banner, parsedOptions);
+
+        LOG(info3) << banner.str();
     }
 
     boost::optional<UnrecognizedParser> unrParser;

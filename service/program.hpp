@@ -186,6 +186,30 @@ protected:
      */
     virtual HelpPrinter::pointer help(const po::variables_map &vars) const;
 
+    /** Data tools (tools that write data, as opposed to mere inspection
+     *  tools) override this to opt into two conventions:
+     *
+     *  - an automatic log file at <dir>/log/<name>-<timestamp>.log when
+     *    --log.file is not given explicitly on the command line;
+     *  - a mandatory startup banner (complete command line, current
+     *    working directory, and the resolved configuration dumped in ini
+     *    format), logged first, before anything else the program logs.
+     *
+     *  @param vars variables as parsed so far (cmdline + config files;
+     *  notify(vars) has NOT been called yet, so bound member variables
+     *  are not yet set -- read values via vars[...] directly).
+     *
+     *  @return the directory the tool operates in (e.g. the dataset
+     *  directory); boost::none (the default) opts out of both
+     *  conventions and keeps the historical behavior.
+     */
+    virtual boost::optional<boost::filesystem::path>
+    operatingDirectory(const po::variables_map &vars) const
+    {
+        (void) vars;
+        return boost::none;
+    }
+
     dbglog::module log_;
 
     po::variables_map
