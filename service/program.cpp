@@ -445,14 +445,16 @@ Program::configureImpl(int argc, char *argv[]
     }
 
     po::variables_map vm;
+    std::vector<po::option> parsedCmdlineOptions;
     std::vector<po::option> parsedOptions;
 
     const auto &parse([&](po::command_line_parser &&parser)
     {
         auto parsed(parser.run());
         po::store(parsed, vm);
-        // kept for the unrecognized-options machinery below and for the
-        // data-tool startup banner's ini dump
+        parsedCmdlineOptions.insert(parsedCmdlineOptions.end()
+                                    , parsed.options.begin()
+                                    , parsed.options.end());
         parsedOptions.insert(parsedOptions.end(), parsed.options.begin()
                              , parsed.options.end());
     });
@@ -723,7 +725,7 @@ Program::configureImpl(int argc, char *argv[]
          * po::include_positional) except only unknown positionals are
          * collected
          */
-        for (const auto &opt : parsedOptions) {
+        for (const auto &opt : parsedCmdlineOptions) {
             if (opt.unregistered
                 || ((opt.position_key >= 0)
                     && (positionals.name_for_position(opt.position_key)
